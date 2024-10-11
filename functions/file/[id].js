@@ -1,132 +1,77 @@
-export async function onRequest(context) {  // Contents of context object  
+export async function onRequest(context) {  
     const {   
-        request, // same as existing Worker API    
-    env, // same as existing Worker API    
-    params, // if filename includes [id] or [[path]]   
-     waitUntil, // same as ctx.waitUntil in existing Worker API    
-     next, // used for middleware or to fetch assets    
-     data, // arbitrary space for passing data between middlewares 
-     } = context;
-     context.request
-    
-    const allowedDomains = env.DOMAIN_LIST.split(",");  //域名从cloudflare的环境变量中获取
-    const firstDomain = allowedDomains[0];  // 获取列表中的第一个域名
+        request,    
+        env,    
+        params,    
+        waitUntil,    
+        next,    
+        data 
+    } = context;
 
-    // Extract the Referer header or use a placeholder if not present
+    const allowedDomains = env.DOMAIN_LIST.split(",");  
+    const firstDomain = allowedDomains[0];  
+
     const Referer = request.headers.get('Referer') || "Referer";
     
-    // Create a URL object from the Referer to extract the hostname
     let refererUrl;
     try {
         refererUrl = new URL(Referer);
     } catch (error) {
         return Response.redirect(`https://${firstDomain}`, 302);
     }
-    
-    // Check if the hostname of the Referer is in the list of allowed domains
+
+    // Check Referer against allowed domains
     if (!allowedDomains.includes(refererUrl.hostname)) {
         return Response.redirect(`https://${firstDomain}`, 302);
     }
-    
-    // Existing code for handling requests continues here...
+
     const url = new URL(request.url);
+
+    // Modify headers to bypass restrictions
+    const modifiedHeaders = new Headers(request.headers);
+    modifiedHeaders.set('Referer', 'https://your-allowed-domain.com');  // Set a valid Referer
     
-    const response = fetch('https://telegra.ph/' + url.pathname + url.search, {
-         method: request.method,
-         headers: request.headers,
-         body: request.body,
-     }).then(async (response) => {
-        console.log(response.ok); // true if the response status is 2xx
-        console.log(response.status); // 200
-        if(response.ok){
-            // Referer header equal to the admin page
-            console.log(url.origin+"/admin")
-            if (request.headers.get('Referer') == url.origin+"/admin") {
-                //show the image
+    const response = fetch(url, {
+        method: request.method,
+        headers: modifiedHeaders,
+        body: request.body,
+    }).then(async (response) => {
+        if (response.ok) {
+            const refererAdmin = url.origin + "/admin";
+            if (request.headers.get('Referer') === refererAdmin) {
                 return response;
             }
 
-        if (typeof env.img_url == "undefined" || env.img_url == null || env.img_url == ""){}else{
-            //check the record from kv
             const record = await env.img_url.getWithMetadata(params.id); 
-            console.log("record")
-            console.log(record)
-            if (record.metadata === null) {
-
-            }else{
-                
-                //if the record is not null, redirect to the image
-                if (record.metadata.ListType=="White"){
+            if (record.metadata) {
+                if (record.metadata.ListType === "White") {
                     return response;
-                }else if (record.metadata.ListType=="Block"){
-                    console.log("Referer")
-                    console.log(request.headers.get('Referer'))
-                    if(typeof request.headers.get('Referer') == "undefined" ||request.headers.get('Referer') == null || request.headers.get('Referer') == ""){
-                        return Response.redirect(url.origin+"/block-img.html", 302)
-                    }else{
-                        return Response.redirect("https://static-res.pages.dev/teleimage/img-block-compressed.png", 302)
-                    }
-
-                }else if (record.metadata.Label=="adult"){
-                    if(typeof request.headers.get('Referer') == "undefined" ||request.headers.get('Referer') == null || request.headers.get('Referer') == ""){
-                        return Response.redirect(url.origin+"/block-img.html", 302)
-                    }else{
-                        return Response.redirect("https://static-res.pages.dev/teleimage/img-block-compressed.png", 302)
-                    }
-                }
-                //check if the env variables WhiteList_Mode are set
-                console.log("env.WhiteList_Mode:",env.WhiteList_Mode)
-                if (env.WhiteList_Mode=="true"){
-                    //if the env variables WhiteList_Mode are set, redirect to the image
-                    return Response.redirect(url.origin+"/whitelist-on.html", 302);
-                }else{
-                    //if the env variables WhiteList_Mode are not set, redirect to the image
-                    return response;
+                } else if (record.metadata.ListType === "Block" || record.metadata.Label === "adult") {
+                    return Response.redirect("https://static-res.pages.dev/teleimage/img-block-compressed.png", 302);
                 }
             }
-            
-        }
 
-        //get time
-        let time = new Date().getTime();
-        
-        let apikey=env.ModerateContentApiKey
-        
-            if(typeof apikey == "undefined" || apikey == null || apikey == ""){
-                
-                if (typeof env.img_url == "undefined" || env.img_url == null || env.img_url == ""){
-                    console.log("Not enbaled KV")
-                    
-                }else{
-                    //add image to kv
-                    await env.img_url.put(params.id, "",{
-                        metadata: { ListType: "None", Label: "None",TimeStamp: time },
-                    });
-                    
+            if (env.WhiteList_Mode === "true") {
+                return Response.redirect(url.origin + "/whitelist-on.html", 302);
+            }
+
+            const time = new Date().getTime();
+            const apikey = env.ModerateContentApiKey;
+            if (apikey) {
+                const moderateResponse = await fetch(`https://api.moderatecontent.com/moderate/?key=${apikey}&url=https://telegra.ph/${url.pathname}${url.search}`);
+                const moderateData = await moderateResponse.json();
+
+                await env.img_url.put(params.id, "", {
+                    metadata: { ListType: "None", Label: moderateData.rating_label, TimeStamp: time },
+                });
+
+                if (moderateData.rating_label === "adult") {
+                    return Response.redirect(url.origin + "/block-img.html", 302);
                 }
-            }else{
-                await fetch(`https://api.moderatecontent.com/moderate/?key=`+apikey+`&url=https://telegra.ph/` + url.pathname + url.search).
-                then(async (response) => {
-                    let moderate_data = await response.json();
-                    console.log(moderate_data)
-                    console.log("---env.img_url---")
-                    console.log(env.img_url=="true")
-                    if (typeof env.img_url == "undefined" || env.img_url == null || env.img_url == ""){}else{
-                        //add image to kv
-                        await env.img_url.put(params.id, "",{
-                            metadata: { ListType: "None", Label: moderate_data.rating_label,TimeStamp: time },
-                        });
-                    }  
-                    if (moderate_data.rating_label=="adult"){
-                        return Response.redirect(url.origin+"/block-img.html", 302)
-                    }});
-             
             }
         }
         return response;
-     });
+    });
 
     return response;
-    
-  }
-  
+}
