@@ -1,34 +1,39 @@
-export async function onRequest(context) {  // Contents of context object  
+export async function onRequest(context) {  
     const {   
-        request, // same as existing Worker API    
-    env, // same as existing Worker API    
-    params, // if filename includes [id] or [[path]]   
-     waitUntil, // same as ctx.waitUntil in existing Worker API    
-     next, // used for middleware or to fetch assets    
-     data, // arbitrary space for passing data between middlewares 
-     } = context;
-     context.request
-    
-    const allowedDomains = env.DOMAIN_LIST.split(",");  //域名从cloudflare的环境变量中获取
+        request, 
+        env, 
+        params, 
+    } = context;
+
+    // 获取允许访问的域名列表
+    const allowedDomains = env.DOMAIN_LIST.split(","); 
     const firstDomain = allowedDomains[0];  // 获取列表中的第一个域名
 
-    // Extract the Referer header or use a placeholder if not present
-    const Referer = request.headers.get('Referer') || "Referer";
-    
-    // Create a URL object from the Referer to extract the hostname
+    // 获取用户代理和 Referer
+    const userAgent = request.headers.get('User-Agent') || "";
+    const Referer = request.headers.get('Referer') || "";
+
+    // 如果是 wget 请求或者没有 Referer，则直接放行
+    if (userAgent.toLowerCase().includes('wget') || Referer === "") {
+        console.log("Direct download or wget detected, skipping whitelist check.");
+        return fetch(request);
+    }
+
+    // 检查 Referer 是否在允许的域名列表中
     let refererUrl;
     try {
         refererUrl = new URL(Referer);
     } catch (error) {
+        // 如果 Referer 无法解析，重定向到第一个允许的域名
         return Response.redirect(`https://${firstDomain}`, 302);
     }
-    
-    // Check if the hostname of the Referer is in the list of allowed domains
+
+    // 如果 Referer 不在白名单中，则重定向到第一个允许的域名
     if (!allowedDomains.includes(refererUrl.hostname)) {
         return Response.redirect(`https://${firstDomain}`, 302);
     }
-    
-    // Existing code for handling requests continues here...
+
+    // 继续处理请求（例如从 telegra.ph 获取图片）
     const url = new URL(request.url);
     
     const response = fetch('https://telegra.ph/' + url.pathname + url.search, {
